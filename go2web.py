@@ -16,7 +16,12 @@ def hash_url(url):
 
 
 def cache_response(url, response):
-    db.insert({'url': hash_url(url), 'response': response})
+    if 'text/html' in response:
+        parsed_response = parse_html(response)
+    else:
+        parsed_response = response
+
+    db.insert({'url': hash_url(url), 'response': parsed_response})
 
 
 def is_cached(url):
@@ -29,8 +34,19 @@ def retrieve_cached_response(url):
 
 
 def print_cached_response(response):
-    print("Response:")
-    print(response)
+    if isinstance(response, list):
+        for item in response:
+            print(item)
+    elif isinstance(response, str):
+        print("Modified JSON Response:")
+        try:
+            json_data = json.loads(response.split('\r\n\r\n', 1)[1])
+            print(json.dumps(json_data, indent=4))  # Print JSON data with indentation
+        except json.JSONDecodeError as e:
+            print("Error: Unable to parse JSON data:", e)
+    else:
+        print("Unknown response type")
+
 
 
 def extract_url_data(url):
@@ -86,24 +102,116 @@ def make_http_request(url):
         client_socket.close()
 
 
+def handle_html_or_json(url):
+    if is_cached(url):
+        print("Retrieving cached response for:", url)
+        response = retrieve_cached_response(url)
+        print_cached_response(response)
+        return response
+    else:
+        response = make_http_request(url)
+        if 'text/html' in response:
+            try:
+                parsed_response = parse_html(response)
+                cache_response(url, parsed_response)
+                return parsed_response
+            except Exception as e:
+                print("Error: Unable to parse HTML data:", e)
+        elif 'application/json' in response:
+            try:
+                json_data = json.loads(response.split('\r\n\r\n', 1)[1])
+                print("Modified JSON Response:")
+                print(json.dumps(json_data, indent=4))  # Modified JSON output
+                return json_data
+            except json.JSONDecodeError as e:
+                print("Error: Unable to parse JSON data:", e)
+        else:
+            print(response)
+
+def parse_html(response):
+    soup = BeautifulSoup(response, 'html.parser')
+    all_elements = soup.find_all(['h1', 'h2', 'h3', 'p'])
+    all_info = []
+
+    for element in all_elements:
+        if element.name.startswith('h'):
+            depth = len(element.name) - 1  # Depth based on heading level
+            tag = f"[{element.name}]"
+            stars = '*' * (4 - depth)  # Adjusting the number of asterisks
+            all_info.append(f"{stars} {tag} {element.get_text()}")  # Customized representation
+        elif element.name == 'p':
+            tag = f"[{element.name}]"
+            all_info.append(f"* {tag} {element.get_text()}")
+
+    links = soup.find_all('a', href=True)
+    links_href = [link['href'] for link in links if link['href'].startswith('http')]
+    all_info.append("-- Links --")
+    all_info += links_href
+
+    return all_info
+
+
+def search(term):
+    search_url = "https://999.md/ro/"
+    if is_cached(search_url):
+        response = retrieve_cached_response(search_url)
+    else:
+        print("Retrieving response for", search_url, "...")
+        response = handle_html_or_json(search_url)
+        cache_response(search_url, response)
+
+    matching_info = [info for info in response if term.lower() in info.lower()]
+    if matching_info:
+        print("Search results for", term, ":")
+        for info in matching_info[:10]:
+            print(info)
+    else:
+        print("No matching results found for", term)
+
+
+def print_error():
+    print("No option provided.")
+    print("Usage: ")
+    print("python websocket.py -u URL")
+    print("python websocket.py -s SEARCH_TERM")
+    print("python websocket.py -h")
+    sys.exit()
+
+
 def main():
     args = sys.argv[1:]
 
-    if '-h' in args:
-        print("Usage: ")
-        print("python go2web.py -u URL")
-        sys.exit()
+    if not args:
+        print_error()
 
     if '-u' in args:
         url_index = args.index('-u') + 1
         if url_index < len(args):
             url = args[url_index]
-            response = make_http_request(url)
-            print("Response from", url, ":")
-            print_cached_response(response)
+            response = handle_html_or_json(url)
+            print("Information extracted from", url, ":")
+            if isinstance(response, list):
+                for info in response:
+                    print(info)
+            elif isinstance(response, dict):
+                pass
         else:
             print("Error: No URL provided after -u")
             sys.exit()
+
+    elif '-s' in args:
+        search_index = args.index('-s') + 1
+        if search_index < len(args):
+            term = ' '.join(args[search_index:])
+            search(term)
+        else:
+            print("Error: No search term provided after -s")
+            sys.exit()
+
+    elif '-h' in args:
+        print("go2web -u <URL>         # make an HTTP request to the specified URL and print the response")
+        print("go2web -s <search-term> # make an HTTP request to search the term using your favorite search engine and print top 10 results")
+        print("go2web -h               # show this help")
 
 
 if __name__ == "__main__":
